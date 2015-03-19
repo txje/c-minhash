@@ -12,9 +12,11 @@ Install
 -------
 
 C:
+
     gcc minhash.c -o minhash
 
 Python:
+
     python setup.py install
 
 
@@ -22,8 +24,10 @@ Usage
 -----
 
 Command line:
+
     minhash <seq> <tile size> <seed>
 
 Python:
+
     import minhash
     hash_val, kmer_pos = minhash.minhash("stringy", 3, random.randint(0,2**32-1))
