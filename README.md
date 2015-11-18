@@ -42,12 +42,12 @@ Returns: minimum hash value (uint32), position of tile with min hash value
 mh_fasta.c
 ----------
 
-Parameters: <query_fasta> <target_fasta> <k> <h> <seed> <threshold>
+Parameters: &lt;query_fasta> &lt;target_fasta> &lt;k> &lt;h> &lt;seed> &lt;threshold>
 
 Query and target files may be the same, in which case it will do pairwise comparison
 
 Results should be piped to an output file, and are in the form:
-<query_idx>,<query_reverse?>,<target_idx>,<# matches>,<offset>
+&lt;query_idx>,&lt;query_reverse?>,&lt;target_idx>,&lt;# matches>,&lt;offset>
 
 Where query and target are indices into their respective FASTA, query_reverse is 1(reverse complemented) or 0, # matches is the integer total of matched k-mers (out of a maximum of h), and the offset is the computed average offset between matched k-mers.
 

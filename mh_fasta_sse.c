@@ -4,6 +4,7 @@
 #include <string.h>
 #include <limits.h>
 #include <time.h>
+#include <emmintrin.h>
 #include "../klib/kseq.h" // FASTA/Q parser
 #include "../klib/kvec.h" // C dynamic vector
 #include "xxHash/xxhash.c" // fast hashing
@@ -126,13 +127,20 @@ int mh_fasta(char *query_fa, char *target_fa, int k, int h, int seed, int thresh
   printf("# Loaded and processed %d reads in %d seconds\n", query_signatures.n, (t1-t0));
   t0 = t1;
 
+  __m128i qhashbin, thashbin, qposbin, tposbin, matchMask, matches, offset;
+  matchMask = _mm_set_epi32(1,1,1,1);
+  uint32_t matchArr[4]; // to collect parts of SSE results at the end
+  uint32_t offsetArr[4];
+  uint32_t matchFinal;
+  uint32_t offsetFinal;
+  int q, qidx, qrev, t;
+
   // if target fasta is different
   if(strcmp(query_fa, target_fa) != 0) {
     signature_list target_signatures = get_fasta_signatures(target_fa, k, h, hash_seeds, 0);
     t1 = time(NULL);
     printf("# Loaded and processed %d (target) reads in %d seconds\n", target_signatures.n, (t1-t0));
     t0 = t1;
-    int q, qidx, qrev, t, matches, offset;
     for(q = 0; q < query_signatures.n/2; q++) {
       for(qrev = 0; qrev <= 1; qrev++) {
         if(qrev == 1) {
@@ -142,18 +150,32 @@ int mh_fasta(char *query_fa, char *target_fa, int k, int h, int seed, int thresh
         }
         Min* qmin = (Min*)(query_signatures.a[qidx]);
         for(t = 0; t < target_signatures.n; t++) {
-          matches = 0;
-          offset = 0;
+          matches = _mm_set_epi32(0,0,0,0);
+          offset = _mm_set_epi32(0,0,0,0);
           Min* tmin = (Min*)(target_signatures.a[t]);
-          for(i = 0; i < h; i++) {
-            if(qmin[i].hash == tmin[i].hash) {
-              matches++;
-              offset = offset + tmin[i].pos - qmin[i].pos;
-            }
+          for(i = 0; i < h; i=i+4) { // do in sets of 4 uint32's w/SSE2 (128bits)
+            qhashbin = _mm_loadu_si128(qhash+i);
+            thashbin = _mm_loadu_si128(thash+i);
+            qposbin = _mm_loadu_si128(qpos+i);
+            tposbin = _mm_loadu_si128(tpos+i);
+            hashmatch = _mm_cmpeq_epi32(qhashbin, thashbin);
+            offset = _mm_add_epi32(offset, _mm_and_si128(hashmatch, _mm_sub_epi32(tposbin, qposbin)));
+            matches = _mm_add_epi32(matches, _mm_and_si128(hashmatch, matchMask));
+            // increment matches
           }
-          if(matches >= threshold) {
-            offset = offset / matches;
-            printf("%d,%d,%d,%d,%d\n", q, qrev, t, matches, offset);
+          // collapse matches and offset
+          _mm_stream_si128(offsetArr, offset); // copy offset contents into array
+          _mm_stream_si128(matchArr, matches);
+          matchFinal = 0;
+          offsetFinal = 0;
+          for(i = 0; i < 4; i++) {
+            matchFinal = matchFinal + matchArr[i];
+            offsetFinal = offsetFinal + offsetArr[i];
+          }
+
+          if(matchFinal >= threshold) {
+            offsetFinal = offsetFinal / matchesFinal;
+            printf("%d,%d,%d,%d,%d\n", q, qrev, t, matchFinal, offsetFinal);
           }
         }
       }
@@ -170,18 +192,32 @@ int mh_fasta(char *query_fa, char *target_fa, int k, int h, int seed, int thresh
         Min* qmin = (Min*)(query_signatures.a[qidx]);
         for(q2 = q+1; q2 < query_signatures.n/2; q2++) {
           q2idx = q2 * 2;
-          matches = 0;
-          offset = 0;
+          matches = _mm_set_epi32(0,0,0,0);
+          offset = _mm_set_epi32(0,0,0,0);
           Min* tmin = (Min*)(query_signatures.a[q2idx]);
-          for(i = 0; i < h; i++) {
-            if(qmin[i].hash == tmin[i].hash) {
-              matches++;
-              offset = offset + tmin[i].pos - qmin[i].pos;
-            }
+          for(i = 0; i < h; i=i+4) { // do in sets of 4 uint32's w/SSE2 (128bits)
+            qhashbin = _mm_loadu_si128(qhash+i);
+            thashbin = _mm_loadu_si128(thash+i);
+            qposbin = _mm_loadu_si128(qpos+i);
+            tposbin = _mm_loadu_si128(tpos+i);
+            hashmatch = _mm_cmpeq_epi32(qhashbin, thashbin);
+            offset = _mm_add_epi32(offset, _mm_and_si128(hashmatch, _mm_sub_epi32(tposbin, qposbin)));
+            matches = _mm_add_epi32(matches, _mm_and_si128(hashmatch, matchMask));
+            // increment matches
           }
-          if(matches >= threshold) {
-            offset = offset / matches;
-            printf("%d,%d,%d,%d,%d\n", q, qrev, q2, matches, offset);
+          // collapse matches and offset
+          _mm_stream_si128(offsetArr, offset); // copy offset contents into array
+          _mm_stream_si128(matchArr, matches);
+          matchFinal = 0;
+          offsetFinal = 0;
+          for(i = 0; i < 4; i++) {
+            matchFinal = matchFinal + matchArr[i];
+            offsetFinal = offsetFinal + offsetArr[i];
+          }
+
+          if(matchFinal >= threshold) {
+            offsetFinal = offsetFinal / matchesFinal;
+            printf("%d,%d,%d,%d,%d\n", q, qrev, q2, matchFinal, offsetFinal);
           }
         }
       }
@@ -208,6 +244,10 @@ int main(int argc, char *argv[]) {
     return -1;
   }
   int h = atoi(argv[4]);
+  if(h % 4 != 0) {
+    printf("[h] must be a multiple of 4 for SSE");
+    return -1;
+  }
   int seed = atoi(argv[5]);
   int threshold = atoi(argv[6]);
   return mh_fasta(query_fasta, target_fasta, k, h, seed, threshold);
